@@ -1,0 +1,53 @@
+# Grid level connectivity
+1  g1 <---> g2
+2  g1 <---> g3
+3  g1 <---> g4
+4  g1 <---> g5
+5  g1 <---> g6
+6  g1 <---> g7
+7  g1 <---> g8
+# Setup connections
+type, public :: connection_set_type
+    PetscInt, pointer :: id_up(:)      ! list of ids of upwind cells
+    PetscInt, pointer :: id_dn(:)      ! list of ids of downwind cells
+    PetscReal, pointer :: dist(:)    ! list of distance vectors, size(-1:3,num_connections) where
+    PetscReal, pointer :: area(:)      ! list of areas of faces normal to distance vectors
+end
+type (connection_set_type) :: conn
+allocate(conn%grid_id_up(nconn))
+allocate(conn%grid_id_dn(nconn))
+!do iconn = 1,nconn
+do g = begg,endg-1
+  conn%grid_id_up(iconn) = g    !... Step-2: Eventually will need to read from surface dataset
+  conn%grid_id_dn(iconn) = g+1  !...         There is already some code that we will be able to
+                                !            use to fill this data structure
+end
+nconn = 7
+#
+loop over connections: NOT loop over grid cells
+do c = begc, endc
+  do j = 1, nlev
+	  qflx_lateral(c,j) = 0._r8
+  endo
+enddo
+do icon = 1, nconn
+	grid_id_up = conn(iconn)%grid_up; g1
+	grid_id_dn = conn(iconn)%grid_dn; g2
+	
+	col_id_up = get_natveg_column_id(grid_id_up)
+	col_id_dn = get_natveg_column_id(grid_id_dn)
+    do j = 1, nlev
+       ! up --> dn
+       qflx_up_to_dn = smp(col_id_up,j) - smp(col_id_dn,j) + (dz * rho *g) ! dist
+       qflx_lateral(col_id_up,j) = qflx_lateral(col_id_up,j) - qflx_up_to_dn
+       qflx_lateral(col_id_dn,j) = qflx_lateral(col_id_dn,j) + qflx_up_to_dn
+    enddo
+enddo
+in soilwater_zengdecker2009.
+Assembly of ‘a’, ‘b’, ‘c’, ‘r’
+do fc = 1, num_hydrologyc
+  c = filter_hydrologyc(fc)
+  do j = 1, nlevbed
+  	 r += (+/-) qflx_lateral(c,j)
+  enddo
+enddo
