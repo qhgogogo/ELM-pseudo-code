@@ -15,11 +15,9 @@ type, public :: connection_set_type
 end type
 type (connection_set_type) :: conn
 nconn = 7
-! the adjustments in the case of AMR are based on the PIMS code adjustments by LC 
-  nconn = (structured_grid%ngx-1)*structured_grid%nly*structured_grid%nlz+ &
-          structured_grid%nlx*(structured_grid%ngy-1)*structured_grid%nlz+ &
-          structured_grid%nlx*structured_grid%nly*(structured_grid%ngz-1)
-	  
+do i=1, nlev
+
+end	  
 allocate(conn%grid_id_up(nconn))
 allocate(conn%grid_id_dn(nconn))
 do iconn = 1,nconn
