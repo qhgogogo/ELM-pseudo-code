@@ -6,17 +6,18 @@
 5  g1 <---> g6
 6  g1 <---> g7
 7  g1 <---> g8
+
+
+integer  :: iconn                                        ! connection loop indices
+integer  :: nlevbed                                      ! number of layers to bedrock
+
+real(r8) :: delta_z_zwt
+real(r8) :: hk(bounds%begc:bounds%endc,1:nlevgrnd)        ! hydraulic conductivity [mm h2o/s]
+real(r8) :: dhkdw(bounds%begc:bounds%endc,1:nlevgrnd)     ! d(hk)/d(vol_liq)
+real(r8) :: amx(bounds%begc:bounds%endc,1:nlevgrnd+1)     ! "a" left off diagonal of tridiagonal matrix
 # Setup connections
-use Connection_module
-
-type, public :: connection_set_type
-    Integer, pointer :: id_up(:)      ! list of ids of upwind cells
-    Integer, pointer :: id_dn(:)      ! list of ids of downwind cells
-    Real, pointer :: dist(:)    ! list of distance vectors
-    Real, pointer :: area(:)      ! list of areas of faces normal to distance vectors
-end type
+use Connection_module, only :: connection_set_type
 type (connection_set_type) :: conn
-
 !currently assume the connections are the same for all layers
 nconn=endc-begc
 allocate(conn%grid_id_up(nconn))
@@ -43,8 +44,8 @@ do iconn = 1, nconn
 	grid_id_up = conn(iconn)%grid_up; !g1
 	grid_id_dn = conn(iconn)%grid_dn; !g2
 	
-	col_id_up = get_natveg_column_id(grid_id_up)   
-	col_id_dn = get_natveg_column_id(grid_id_dn)
+	col_id_up = get_natveg_column_id(grid_id_up,col_id)   
+	col_id_dn = get_natveg_column_id(grid_id_dn,col_id)
     do j = 1, nlev
         ! up --> dn
 	!dzq    = (zq(c,j)-zq(c,j-1))
@@ -55,11 +56,26 @@ do iconn = 1, nconn
         !num    = (smp(c,j+1)-smp(c,j)) - dzq
         !    qout(c,j)   = -hk(c,j)*num/den
 	 dz=    ! 
-	!hydraulic conductivity hkl(iconn,j)
-        hkl(iconn) = 1000._r8* sqrt(hk(col_id_up,j)*hk(col_id_dn,j))
-       qflx_up_to_dn = smp(col_id_up,j) - smp(col_id_dn,j) + dz ! dist
-       qflx_lateral(col_id_up,j) = qflx_lateral(col_id_up,j) - qflx_up_to_dn
-       qflx_lateral(col_id_dn,j) = qflx_lateral(col_id_dn,j) + qflx_up_to_dn
+	!hydraulic conductivity hkl(iconn,j) is
+        !the lateral hydraulic conductivity is calculated using the geometric mean of the 
+        !neighbouring lateral cells and is approximated as 1000 times of the vertical hydraulic conductivity
+             s1 = 0.5_r8*(h2osoi_vol(col_id_up,j) + h2osoi_vol(col_id_dn,j))) / &
+                    (0.5_r8*(watsat(col_id_up,j)+watsat(col_id_dn,j)))
+         
+            s1 = min(1._r8, s1)
+	    bswl = bsw(c,j)+bsw(c,j)
+            s2 = sqrt(hksat(col_id_up,j), hksat(col_id_dn,j))*s1**(2._r8*bsw(c,j)+2._r8)
+
+            ! replace fracice with impedance factor, as in zhao 97,99
+            !if (origflag == 1) then
+            !   imped(c,j)=(1._r8-0.5_r8*(fracice(c,j)+fracice(c,min(nlevsoi, j+1))))
+            !else
+               imped(iconn,j)=10._r8**(-e_ice*(0.5_r8*(icefrac(col_id_up,j)+icefrac(col_id_dn,j))))
+            !endif
+            hkl(iconn,j) = imped(c,j)*s1*s2*1000.0_r8
+            qflx_up_to_dn = hkl(iconn,j)(smp(col_id_up,j) - smp(col_id_dn,j) + dzl) ! dzl is the height difference between two neighbouring lateral cells
+            qflx_lateral(col_id_up,j) = qflx_lateral(col_id_up,j) - qflx_up_to_dn
+            qflx_lateral(col_id_dn,j) = qflx_lateral(col_id_dn,j) + qflx_up_to_dn
     enddo
 enddo
 
@@ -71,10 +87,42 @@ enddo
 !can be formed as below:
 ! r_j = a_j [d wat_j-1] + b_j [d wat_j] + c_j [d wat_j+1]
 
-!hydraulic conductivity hkl(iconn,j)
 
+do iconn = 1, nconn
+	grid_id_up = conn(iconn)%grid_up; !g1
+	grid_id_dn = conn(iconn)%grid_dn; !g2
+	
+	col_id_up = get_natveg_column_id(grid_id_up,col_id)   
+	col_id_dn = get_natveg_column_id(grid_id_dn,col_id)
+    do j = 1, nlev
+    
+      do fc = 1, num_hydrologyc
+         c = filter_hydrologyc(fc)
+         nlevbed = nlev2bed(c)
+         do j = 1, nlevbed
+            ! compute hydraulic conductivity based on liquid water content only
 
+            if (origflag == 1) then
+               s1 = 0.5_r8*(h2osoi_vol(c,j) + h2osoi_vol(c,min(nlevsoi, j+1))) / &
+                    (0.5_r8*(watsat(c,j)+watsat(c,min(nlevsoi, j+1))))
+         
+            s1 = min(1._r8, s1)
+            s2 = hksat(c,j)*s1**(2._r8*bsw(c,j)+2._r8)
 
+            ! replace fracice with impedance factor, as in zhao 97,99
+            if (origflag == 1) then
+               imped(c,j)=(1._r8-0.5_r8*(fracice(c,j)+fracice(c,min(nlevsoi, j+1))))
+            else
+               imped(c,j)=10._r8**(-e_ice*(0.5_r8*(icefrac(c,j)+icefrac(c,min(nlevsoi, j+1)))))
+            endif
+            hkl(c,j) = imped(c,j)*s1*s2
+            dhkdw(c,j) = imped(c,j)*(2._r8*bsw(c,j)+3._r8)*s2* &
+                 (1._r8/(watsat(c,j)+watsat(c,min(nlevsoi, j+1))))
+
+           
+
+         end do
+      end do
 !
 !
 ! layer j=1
@@ -90,7 +138,7 @@ dy = 1000;
          qout(c,j)   = -hk(c,j)*num/den
          dqodw1(c,j) = -(-hk(c,j)*dsmpdw(c,j)   + num*dhkdw(c,j))/den
          dqodw2(c,j) = -( hk(c,j)*dsmpdw(c,j+1) + num*dhkdw(c,j))/den
-         rmx(c,j) =  qin(c,j) - qout(c,j) - qflx_rootsoi_col(c,j) + qflx_lateral(c,j)* den / dx
+         rmx(c,j) =  qin(c,j) - qout(c,j) - qflx_rootsoi_col(c,j) + qflx_lateral(c,j)* dz(c,j) / dx
          amx(c,j) =  0._r8
          bmx(c,j) =  dzmm(c,j)*(sdamp+1._r8/dtime) + dqodw1(c,j)
          cmx(c,j) =  dqodw2(c,j)
